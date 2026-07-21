@@ -39,8 +39,10 @@ int main() {
                      out.verts.size()/3, out.tris.size()/3, out.normals.size()/3);
         return 1;
     }
-    if (!out.pbr.empty()) {
-        std::fprintf(stderr, "new Alpha Wrap vertices incorrectly retained source PBR\n");
+    // Textured sources get a per-vertex preview material projected onto the
+    // wrap's new vertices (empty would also be legal if projection failed).
+    if (!out.pbr.empty() && out.pbr.size() != out.verts.size() / 3 * 6) {
+        std::fprintf(stderr, "projected preview PBR is not six channels per wrap vertex\n");
         return 1;
     }
 

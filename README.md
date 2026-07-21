@@ -86,12 +86,23 @@ and use **regenerate from saved image** to run it again with the current setting
 Older manifests fall back to their thumbnail and can only regenerate when their
 older processed source file is available.
 
-When built with CGAL 5.5 or newer, asset export also offers **watertight print
-wrap**. It runs CPU Alpha Wrap over the selected components and previews the
-exact replacement geometry before download. CGAL guarantees the result is
-closed, oriented, intersection-free, and 2-manifold. `detail size` controls the
-smallest holes/cavities the wrap enters; `offset` controls how tightly it encloses
-the generated surface. Both are percentages of the source bounding-box diagonal.
+Asset export also offers **watertight print wrap**, which previews the exact
+replacement geometry before download. Two CPU backends produce a closed,
+oriented, 2-manifold solid from the selected components:
+
+- **winding** (always available, dependency-free): samples a winding-number
+  signed distance on a grid (`T2_PRINT_RES` cells along the longest axis,
+  default 384) and contours it with the in-repo marching-tetrahedra extractor.
+  Closed regions keep their exact surface — no offset dilation — while open
+  sheets survive as thin solid slabs (`T2_PRINT_SHELL`, fraction of the
+  bounding-box diagonal; unset = one voxel, negative disables).
+- **cgal** (when built with CGAL 5.5 or newer): CPU Alpha Wrap. `detail size`
+  controls the smallest holes/cavities the wrap enters; `offset` controls how
+  tightly it encloses the generated surface. Both are percentages of the source
+  bounding-box diagonal.
+
+`T2_PRINT_BACKEND=winding|cgal` selects explicitly; the default is `cgal` when
+compiled in, `winding` otherwise.
 Because wrapping creates new vertices, its fast browser preview is geometry-only.
 When the source is textured, GLB download automatically unwraps the print mesh
 with xatlas and rebakes base color, metallic, roughness, and opacity: each atlas
@@ -298,9 +309,10 @@ cmake --build build -j
 ```
 
 CGAL is auto-detected. Install CGAL 5.5 or newer before configuring to enable
-the portable CPU print-remesh backend, or pass `-DTRELLIS2_CGAL=OFF` to disable
+the Alpha Wrap print-remesh backend, or pass `-DTRELLIS2_CGAL=OFF` to disable
 the probe explicitly. CMake prints whether Alpha Wrap was enabled. The standard
-demo container already includes CGAL 6.1.1.
+demo container already includes CGAL 6.1.1. The winding-number print-remesh
+backend is dependency-free and always built.
 
 If you already cloned without `--recursive`:
 
@@ -330,6 +342,7 @@ reduction.
 | `convert_ss_dec_to_gguf.py`  | stage-1 decoder checkpoint → GGUF converter |
 | `mesh_export.{h,cpp}` | CUDA-free GLB export with direct vertex PBR or projected UV-atlas textures |
 | `print_remesh.{h,cpp}` | optional CGAL Alpha Wrap reconstruction and closest-surface PBR transfer |
+| `winding_remesh.cpp` | dependency-free winding-number print remesh (BVH + Barnes-Hut winding + SDF grid) |
 | `examples/`    | CLI tools (`dino_info`, `ss_flow_info`, `ss_sample`, `ss_decode`, `ss_mesh`, `mesh2glb`) |
 | `examples/marching_cubes.h` | single-file isosurface → OBJ extractor      |
 | `third_party/` | vendored `xatlas` (print-wrap and opt-in ordinary UV unwrap) |

@@ -83,9 +83,65 @@ static const int TET_TRI[16][7] = {
 
 } // namespace detail
 
+namespace detail {
+
+// Combinatorial triangle orientation: decided once per (tet, case, triangle)
+// from the canonical cell geometry with midpoint crossings, winding each
+// triangle so its normal points from the inside corners toward the outside
+// corners. Unlike a per-instance test against the sampled field this never
+// consults the field itself, so orientation stays consistent even where the
+// field is discontinuous or its gradient is degenerate.
+struct FlipTable {
+    bool flip[6][16][2] = {};
+    FlipTable() {
+        for (int t = 0; t < 6; ++t) {
+            const int * tc = TETRA[t];
+            for (int code = 1; code < 15; ++code) {
+                double cin[3] = {0,0,0}, cout[3] = {0,0,0};
+                int nin = 0, nout = 0;
+                for (int i = 0; i < 4; ++i) {
+                    const int * c = CORNER[tc[i]];
+                    if (code & (1 << i)) {
+                        for (int d = 0; d < 3; ++d) cin[d] += c[d];
+                        ++nin;
+                    } else {
+                        for (int d = 0; d < 3; ++d) cout[d] += c[d];
+                        ++nout;
+                    }
+                }
+                double dir[3];
+                for (int d = 0; d < 3; ++d) dir[d] = cout[d] / nout - cin[d] / nin;
+                const int * tri = TET_TRI[code];
+                for (int e = 0; tri[e] >= 0; e += 3) {
+                    double p[3][3];
+                    for (int k = 0; k < 3; ++k) {
+                        const int * ed = TET_EDGE[tri[e + k]];
+                        const int * a = CORNER[tc[ed[0]]], * b = CORNER[tc[ed[1]]];
+                        for (int d = 0; d < 3; ++d) p[k][d] = 0.5 * (a[d] + b[d]);
+                    }
+                    const double u[3] = {p[1][0]-p[0][0], p[1][1]-p[0][1], p[1][2]-p[0][2]};
+                    const double v[3] = {p[2][0]-p[0][0], p[2][1]-p[0][1], p[2][2]-p[0][2]};
+                    const double n[3] = {u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]};
+                    flip[t][code][e / 3] =
+                        n[0]*dir[0] + n[1]*dir[1] + n[2]*dir[2] < 0.0;
+                }
+            }
+        }
+    }
+};
+
+} // namespace detail
+
+// weld_by_grid_edge selects vertex deduplication by the (unique) grid edge a
+// crossing sits on instead of by quantized position. For surfaces that never
+// reach the grid boundary this is exact: distinct edges never fuse, so nearly
+// touching sheets cannot weld into pinholes or non-manifold knife contacts.
+// Fields that DO reach the boundary should keep the default position welding,
+// which collapses the degenerate cap slivers the pad interpolation produces.
 inline Mesh extract(const float * field, int nx, int ny, int nz, float iso,
-                    float pad = -1e30f) {
+                    float pad = -1e30f, bool weld_by_grid_edge = false) {
     using namespace detail;
+    static const FlipTable FLIP;   // magic static: thread-safe one-time init
     Mesh mesh;
 
     // Tie-breaking jitter (Simulation-of-Simplicity style): a corner whose value
@@ -126,16 +182,28 @@ inline Mesh extract(const float * field, int nx, int ny, int nz, float iso,
     // and keeping the boundary watertight), while shared edges across cubes —
     // which already yield identical positions — still merge as before.
     const double QS = 1024.0; // sub-milli-voxel quantization
+    // Corner id for grid-edge keying; coords range [-1, n] from the pad ring.
+    const int64_t sx = nx + 2, sy = ny + 2;
+    auto corner_id = [&](const int c[3]) -> int64_t {
+        return (c[0] + 1) + sx * ((c[1] + 1) + sy * (int64_t)(c[2] + 1));
+    };
     auto edge_vertex = [&](const int ca[3], const int cb[3], float va, float vb) -> int {
         float t = (vb != va) ? (iso - va) / (vb - va) : 0.5f;
         if (t < 0.0f) t = 0.0f; else if (t > 1.0f) t = 1.0f;
         float p[3] = { ca[0] + t * (cb[0] - ca[0]),
                        ca[1] + t * (cb[1] - ca[1]),
                        ca[2] + t * (cb[2] - ca[2]) };
-        int64_t qx = (int64_t) std::llround(p[0] * QS) + 0x200000;
-        int64_t qy = (int64_t) std::llround(p[1] * QS) + 0x200000;
-        int64_t qz = (int64_t) std::llround(p[2] * QS) + 0x200000;
-        int64_t key = (qx * 0x400000LL + qy) * 0x400000LL + qz;
+        int64_t key;
+        if (weld_by_grid_edge) {
+            const int64_t ia = corner_id(ca), ib = corner_id(cb);
+            const int64_t total = sx * sy * (int64_t)(nz + 2);
+            key = std::min(ia, ib) * total + std::max(ia, ib);
+        } else {
+            int64_t qx = (int64_t) std::llround(p[0] * QS) + 0x200000;
+            int64_t qy = (int64_t) std::llround(p[1] * QS) + 0x200000;
+            int64_t qz = (int64_t) std::llround(p[2] * QS) + 0x200000;
+            key = (qx * 0x400000LL + qy) * 0x400000LL + qz;
+        }
         auto it = vmap.find(key);
         if (it != vmap.end()) return it->second;
 
@@ -177,17 +245,6 @@ inline Mesh extract(const float * field, int nx, int ny, int nz, float iso,
             const int * tri = TET_TRI[code];
             if (tri[0] < 0) continue;
 
-            // Gather this tetra's triangles (1 or 2), then decide their winding
-            // ONCE, together: flip so the summed geometric normal (snorm) agrees
-            // with the summed outward vertex normal (gsum = sum of -grad over the
-            // triangle vertices). gsum is PARALLEL to the surface normal, so the
-            // dot is never near zero — unlike a centroid-difference proxy, which
-            // can be in-plane at boundary/crease tetra and pick a random sign.
-            // The surface inside a tetra is planar, so a quad's two triangles are
-            // coplanar and flip as a unit (a per-triangle test would mis-flip a
-            // sliver triangle, whose own geometric normal is ~0).
-            int tribuf[2][3]; int ntri = 0;
-            double snorm[3] = {0, 0, 0}, gsum[3] = {0, 0, 0};
             for (int e = 0; tri[e] >= 0; e += 3) {
                 int vi[3];
                 for (int k = 0; k < 3; ++k) {
@@ -196,26 +253,8 @@ inline Mesh extract(const float * field, int nx, int ny, int nz, float iso,
                     vi[k] = edge_vertex(ccoord[la], ccoord[lb], cval[la], cval[lb]);
                 }
                 if (vi[0] == vi[1] || vi[1] == vi[2] || vi[0] == vi[2]) continue; // degenerate
-                const float * P0 = &mesh.verts[3*vi[0]];
-                const float * P1 = &mesh.verts[3*vi[1]];
-                const float * P2 = &mesh.verts[3*vi[2]];
-                float u[3] = { P1[0]-P0[0], P1[1]-P0[1], P1[2]-P0[2] };
-                float v[3] = { P2[0]-P0[0], P2[1]-P0[1], P2[2]-P0[2] };
-                snorm[0] += u[1]*v[2]-u[2]*v[1];
-                snorm[1] += u[2]*v[0]-u[0]*v[2];
-                snorm[2] += u[0]*v[1]-u[1]*v[0];
-                for (int k = 0; k < 3; ++k) {
-                    gsum[0] += mesh.normals[3*vi[k]];
-                    gsum[1] += mesh.normals[3*vi[k]+1];
-                    gsum[2] += mesh.normals[3*vi[k]+2];
-                }
-                tribuf[ntri][0] = vi[0]; tribuf[ntri][1] = vi[1]; tribuf[ntri][2] = vi[2];
-                ++ntri;
-            }
-            bool flip = (snorm[0]*gsum[0] + snorm[1]*gsum[1] + snorm[2]*gsum[2]) < 0.0;
-            for (int a = 0; a < ntri; ++a) {
-                int v0 = tribuf[a][0], v1 = tribuf[a][1], v2 = tribuf[a][2];
-                if (flip) { int tmp = v1; v1 = v2; v2 = tmp; }
+                int v0 = vi[0], v1 = vi[1], v2 = vi[2];
+                if (FLIP.flip[t][code][e / 3]) { int tmp = v1; v1 = v2; v2 = tmp; }
                 mesh.tris.insert(mesh.tris.end(), { v0, v1, v2 });
             }
         }

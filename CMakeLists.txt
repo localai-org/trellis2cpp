@@ -51,6 +51,7 @@ add_library(trellis2
     trellis2_capi.cpp trellis2_capi.h
     mesh_export.cpp mesh_export.h
     print_remesh.cpp print_remesh.h
+    winding_remesh.cpp
     third_party/xatlas/xatlas.cpp)
 target_include_directories(trellis2 PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

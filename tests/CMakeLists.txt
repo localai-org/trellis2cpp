@@ -71,6 +71,12 @@ if(TRELLIS2_HAVE_CGAL)
     target_compile_features(test_print_remesh PRIVATE cxx_std_14)
 endif()
 
+# Dependency-free winding-number print remesh (winding_remesh.cpp); runs in
+# CGAL and non-CGAL builds alike.
+add_executable(test_winding_remesh test_winding_remesh.cpp)
+target_link_libraries(test_winding_remesh PRIVATE trellis2)
+target_compile_features(test_winding_remesh PRIVATE cxx_std_14)
+
 # ── ctest registration ────────────────────────────────────────────────────────
 # Asset paths default to the in-repo locations produced by
 # scripts/download_models.sh + converters + scripts/refgen.sh, overridable via
@@ -92,6 +98,7 @@ add_test(NAME mesh_export COMMAND test_mesh_export)
 if(TRELLIS2_HAVE_CGAL)
     add_test(NAME print_remesh COMMAND test_print_remesh)
 endif()
+add_test(NAME winding_remesh COMMAND test_winding_remesh)
 add_test(NAME background_removal COMMAND test_background_removal)
 
 add_test(NAME preprocess COMMAND test_preprocess

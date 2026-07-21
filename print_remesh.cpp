@@ -29,6 +29,12 @@
 namespace t2print {
 
 bool available() {
+    // The winding-number backend (winding_remesh.cpp) carries no dependency,
+    // so some print-remesh backend is always present.
+    return true;
+}
+
+bool alpha_available() {
 #ifdef TRELLIS2_USE_CGAL
     return true;
 #else
@@ -83,7 +89,8 @@ bool alpha_wrap(const std::vector<float> & source_verts,
 #ifndef TRELLIS2_USE_CGAL
     (void) source_verts; (void) source_tris;
     (void) alpha_ratio; (void) offset_ratio;
-    err = "print remeshing is unavailable (rebuild with CGAL >= 5.5)";
+    err = "the CGAL Alpha Wrap backend is unavailable (rebuild with CGAL >= 5.5, "
+          "or select the winding backend with T2_PRINT_BACKEND=winding)";
     return false;
 #else
     if (source_verts.size() < 9 || source_tris.size() < 3) {
@@ -197,10 +204,8 @@ bool project_pbr(const std::vector<float> & source_verts,
                  std::string & err) {
     out_pbr.clear();
 #ifndef TRELLIS2_USE_CGAL
-    (void) source_verts; (void) source_tris; (void) source_pbr;
-    (void) query_points;
-    err = "PBR projection is unavailable (rebuild with CGAL >= 5.5)";
-    return false;
+    return winding_project_pbr(source_verts, source_tris, source_pbr,
+                               query_points, out_pbr, err);
 #else
     using Kernel = CGAL::Exact_predicates_inexact_constructions_kernel;
     using Point = Kernel::Point_3;

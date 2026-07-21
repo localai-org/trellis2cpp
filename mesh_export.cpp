@@ -683,10 +683,30 @@ bool prepare_print_mesh(const float * verts, int nv,
     PreparedMesh source;
     if (!prepare_mesh(verts, nv, tris, nt, pbr, opt, source, err)) return false;
 
+    // Backend selection (prototype A/B switch): CGAL Alpha Wrap when compiled
+    // in, the dependency-free winding-number remesh otherwise. T2_PRINT_BACKEND
+    // ("cgal"/"winding") overrides; T2_PRINT_RES sets the winding grid (cells
+    // along the longest axis, default 384) and T2_PRINT_SHELL the open-sheet
+    // shell ratio (fraction of the bbox diagonal; <0 disables, 0 = one voxel).
+    const char * backend = std::getenv("T2_PRINT_BACKEND");
+    const bool use_winding = backend ? std::strcmp(backend, "winding") == 0
+                                     : !t2print::alpha_available();
     PreparedMesh wrapped;
-    if (!t2print::alpha_wrap(source.verts, source.tris, alpha_ratio, offset_ratio,
-                             wrapped.verts, wrapped.normals, wrapped.tris, err))
+    if (use_winding) {
+        int res = 384;
+        if (const char * r = std::getenv("T2_PRINT_RES")) {
+            const int v = std::atoi(r);
+            if (v > 0) res = v;
+        }
+        float shell = 0.0f;
+        if (const char * s = std::getenv("T2_PRINT_SHELL")) shell = (float) std::atof(s);
+        if (!t2print::winding_remesh(source.verts, source.tris, res, shell,
+                                     wrapped.verts, wrapped.normals, wrapped.tris, err))
+            return false;
+    } else if (!t2print::alpha_wrap(source.verts, source.tris, alpha_ratio, offset_ratio,
+                                    wrapped.verts, wrapped.normals, wrapped.tris, err)) {
         return false;
+    }
     // Alpha Wrap constructs entirely new offset vertices, so source per-vertex
     // attributes cannot be carried directly. When the source is textured, sample
     // its material at each wrap vertex by closest-surface projection — the same

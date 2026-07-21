@@ -44,7 +44,7 @@ int main(int argc, char ** argv) {
         }
     }
     if (print_wrap && !t2glb::print_remesh_available()) {
-        std::fprintf(stderr, "print remeshing unavailable: rebuild with CGAL 5.5 or newer\n");
+        std::fprintf(stderr, "print remeshing unavailable\n");
         return 1;
     }
 
@@ -85,7 +85,8 @@ int main(int argc, char ** argv) {
     std::fprintf(stderr, "in: %s  %u verts  %u tris  %s\n", magic, nv, nt,
                  textured ? "textured" : "geometry-only");
     std::fprintf(stderr, "export: %s ...\n",
-                 print_wrap ? "constructing watertight CGAL Alpha Wrap" : "preserving input topology");
+                 print_wrap ? "constructing watertight print remesh (T2_PRINT_BACKEND selects cgal/winding)"
+                            : "preserving input topology");
 
     std::vector<uint8_t> glb; std::string err;
     t2glb::PreparedMesh wrapped;
